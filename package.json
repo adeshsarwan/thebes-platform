@@ -1,11 +1,11 @@
 {
   "name": "thebes-intelligence",
   "version": "0.1.0",
-  "description": "Shared identifier, attribution, and event contracts for the Thebes Platform.",
+  "description": "Shared contracts and minimal backend service for the Thebes Platform.",
   "private": true,
   "type": "module",
-  "main": "./dist/contracts/index.js",
-  "types": "./dist/contracts/index.d.ts",
+  "main": "./dist/server.js",
+  "types": "./dist/server.d.ts",
   "exports": {
     ".": {
       "types": "./dist/contracts/index.d.ts",
@@ -22,9 +22,15 @@
     "./utilities": {
       "types": "./dist/utilities/index.d.ts",
       "import": "./dist/utilities/index.js"
+    },
+    "./app": {
+      "types": "./dist/app/build-app.d.ts",
+      "import": "./dist/app/build-app.js"
     }
   },
   "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "node dist/server.js",
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
@@ -42,6 +48,7 @@
   "author": "",
   "license": "UNLICENSED",
   "dependencies": {
+    "fastify": "^5.11.0",
     "uuid": "^14.0.1",
     "zod": "^4.4.3"
   },
@@ -50,6 +57,7 @@
     "@types/node": "^26.1.2",
     "eslint": "^10.8.0",
     "prettier": "^3.9.6",
+    "tsx": "^4.23.1",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.65.0",
     "vitest": "^4.1.10"
