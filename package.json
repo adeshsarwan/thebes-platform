@@ -1,0 +1,57 @@
+{
+  "name": "thebes-intelligence",
+  "version": "0.1.0",
+  "description": "Shared identifier, attribution, and event contracts for the Thebes Platform.",
+  "private": true,
+  "type": "module",
+  "main": "./dist/contracts/index.js",
+  "types": "./dist/contracts/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/contracts/index.d.ts",
+      "import": "./dist/contracts/index.js"
+    },
+    "./contracts": {
+      "types": "./dist/contracts/index.d.ts",
+      "import": "./dist/contracts/index.js"
+    },
+    "./validation": {
+      "types": "./dist/validation/index.d.ts",
+      "import": "./dist/validation/index.js"
+    },
+    "./utilities": {
+      "types": "./dist/utilities/index.d.ts",
+      "import": "./dist/utilities/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "verify": "npm run typecheck && npm run lint && npm run format:check && npm test && npm run build"
+  },
+  "keywords": [
+    "thebes",
+    "tracking",
+    "attribution",
+    "contracts"
+  ],
+  "author": "",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "uuid": "^14.0.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.1.2",
+    "eslint": "^10.8.0",
+    "prettier": "^3.9.6",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.65.0",
+    "vitest": "^4.1.10"
+  }
+}
