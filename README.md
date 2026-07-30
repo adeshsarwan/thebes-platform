@@ -1,29 +1,36 @@
 # Thebes Intelligence
 
-Thebes Intelligence is the shared backend and intelligence contract layer for the Thebes Platform. The current package defines the authoritative identifiers, attribution payload, and event envelope that future systems will share.
+Thebes Intelligence is the shared contracts and minimum backend service layer for the Thebes Platform. It currently provides the ST-001 identifier, attribution, and event contracts plus the ST-002 Fastify service bootstrap.
 
 ## Current Scope
-
-This repository currently implements ST-001: Define shared identifier and tracking contract.
 
 Included:
 
 - Branded TypeScript identifier types
 - UUID v7 and compact URL-safe identifier generators
-- Zod runtime validation for identifiers, attribution, event envelopes, and external provider IDs
-- Architecture documentation and ADR-001
-- Vitest coverage for generation and validation rules
+- Zod runtime validation for identifiers, attribution, event envelopes, external provider IDs, and service environment configuration
+- Minimal Fastify HTTP service
+- Request ID handling using the ST-001 `request_id` contract
+- `/health` and `/ready` endpoints
+- Stable JSON error responses
+- Graceful shutdown handling for `SIGTERM` and `SIGINT`
+- Architecture documentation and automated tests
 
 Deliberately not implemented yet:
 
 - UI
 - Authentication
-- HTTP services or endpoints
+- Database persistence, ORM, MySQL, Redis, Docker, Kubernetes, or GraphQL
 - Campaign management
-- Google Ads or GAM import execution
-- ROI calculations or optimization workflows
+- Google Ads or GAM API integrations
 - SDK event ingestion services
-- Databases, queues, Docker, or infrastructure code
+- ROI calculations or optimization workflows
+- Deployment configuration or GitHub Actions
+
+## Prerequisites
+
+- Node.js 20 or newer
+- npm 10 or newer
 
 ## Installation
 
@@ -31,89 +38,125 @@ Deliberately not implemented yet:
 npm install
 ```
 
+## Local Development
+
+```bash
+npm run dev
+```
+
+The development server reads environment variables and defaults to `0.0.0.0:3996`.
+
+## Production Build And Start
+
+```bash
+npm run build
+npm start
+```
+
+## Environment Variables
+
+| Variable          | Default           | Description                                           |
+| ----------------- | ----------------- | ----------------------------------------------------- |
+| `NODE_ENV`        | `development`     | Runtime mode: `development`, `test`, or `production`. |
+| `HOST`            | `0.0.0.0`         | Host passed to Fastify listen.                        |
+| `PORT`            | `3996`            | TCP port, validated from 1 to 65535.                  |
+| `LOG_LEVEL`       | `info`            | Fastify/Pino log level.                               |
+| `SERVICE_NAME`    | `thebes-platform` | Service name returned by `/health`.                   |
+| `SERVICE_VERSION` | package version   | Service version returned by `/health`.                |
+
+Invalid configuration fails startup with a readable error. No secrets or external service credentials are part of ST-002.
+
+## Endpoints
+
+### `GET /health`
+
+Reports that the process is alive. It performs no database or external dependency checks.
+
+```json
+{
+  "status": "ok",
+  "service": "thebes-platform",
+  "version": "0.1.0",
+  "timestamp": "2026-07-30T08:00:00.000Z",
+  "request_id": "0198614b-75cc-7122-8ff0-6d9e9bc8f801"
+}
+```
+
+### `GET /ready`
+
+Reports initial application readiness. The checks object is shaped so future dependency checks can be added without changing the endpoint contract unnecessarily.
+
+```json
+{
+  "status": "ready",
+  "checks": {
+    "configuration": "ok",
+    "application": "ok"
+  },
+  "timestamp": "2026-07-30T08:00:00.000Z",
+  "request_id": "0198614b-75cc-7122-8ff0-6d9e9bc8f801"
+}
+```
+
+## Request ID Behaviour
+
+Every request receives a public `request_id` that follows the ST-001 UUID v7 request ID policy.
+
+- A valid incoming `x-request-id` header is preserved.
+- A missing or malformed `x-request-id` header is replaced with a generated UUID v7 request ID.
+- The final request ID is returned in the `x-request-id` response header.
+- Route handlers use the final request ID.
+- Fastify request-scoped logs include the final request ID as `request_id`.
+
+`request_id` is for request and log correlation only. It is not a business identifier.
+
+## Error Response Shape
+
+Errors use a stable JSON response shape:
+
+```json
+{
+  "error": {
+    "code": "INTERNAL_SERVER_ERROR",
+    "message": "Internal Server Error"
+  },
+  "request_id": "0198614b-75cc-7122-8ff0-6d9e9bc8f801",
+  "timestamp": "2026-07-30T08:00:00.000Z"
+}
+```
+
+Production responses do not expose stack traces for server errors. The service logs the underlying error.
+
+## Graceful Shutdown
+
+The production entrypoint installs `SIGTERM` and `SIGINT` handlers. On normal shutdown the service logs shutdown start, closes Fastify cleanly, logs completion, and exits successfully.
+
 ## Scripts
 
 ```bash
+npm run dev
 npm run typecheck
 npm run lint
+npm run format
 npm run format:check
 npm test
 npm run build
+npm start
 npm run verify
 ```
 
-`npm run verify` runs the required quality gates in sequence.
+`npm run verify` runs typecheck, lint, format check, tests, and build.
 
 ## Folder Structure
 
 ```text
 docs/architecture/        Tracking contract documentation and decisions
+src/app/                  Fastify application factory, server startup, shutdown helpers
+src/config/               Environment validation
 src/contracts/            Branded TypeScript contracts
-src/validation/           Zod schemas for runtime validation
+src/plugins/              Request context plugin
+src/routes/               Health and readiness routes
 src/utilities/            Identifier generation and validation helpers
-tests/                    Vitest contract tests
+src/validation/           Zod schemas for runtime validation
+tests/                    Vitest contract and service tests
 ```
-
-## Generate IDs
-
-```ts
-import {
-  generateAdsAccountId,
-  generateAdsNetworkId,
-  generateCompanyId,
-  generateRouteId,
-  generateSessionId,
-} from 'thebes-intelligence/utilities';
-
-const company_id = generateCompanyId();
-const ads_network_id = generateAdsNetworkId();
-const ads_account_id = generateAdsAccountId();
-const route_id = generateRouteId();
-const session_id = generateSessionId();
-```
-
-Durable entity and event IDs use UUID v7. This includes `ads_network_id` for a Google Ads manager or network account and `ads_account_id` for an advertising account. Browser and URL transport IDs use compact random URL-safe values with fixed prefixes.
-
-## Validate Attribution
-
-```ts
-import { attributionContractV1Schema } from 'thebes-intelligence/validation';
-
-const parsed = attributionContractV1Schema.parse({
-  contract_version: 'thebes.attribution.v1',
-  route_id: 'rte_exampleValue123',
-  visitor_id: 'vst_exampleValue123',
-  session_id: 'ses_exampleValue123',
-  page_view_id: 'pv_exampleValue123',
-  first_seen_at: '2026-07-30T08:00:00.000Z',
-  last_seen_at: '2026-07-30T08:00:00.000Z',
-});
-```
-
-## Validate Event Envelopes
-
-```ts
-import { eventEnvelopeV1Schema } from 'thebes-intelligence/validation';
-
-const parsed = eventEnvelopeV1Schema.parse({
-  contract_version: 'thebes.event.v1',
-  event_id: '0198614b-75cc-7122-8ff0-6d9e9bc8f801',
-  event_name: 'sdk.page_viewed',
-  occurred_at: '2026-07-30T08:00:00.000Z',
-  visitor_id: 'vst_exampleValue123',
-  session_id: 'ses_exampleValue123',
-  page_view_id: 'pv_exampleValue123',
-  source: 'publisher_sdk',
-  attribution: {
-    contract_version: 'thebes.attribution.v1',
-    visitor_id: 'vst_exampleValue123',
-    session_id: 'ses_exampleValue123',
-    page_view_id: 'pv_exampleValue123',
-    first_seen_at: '2026-07-30T08:00:00.000Z',
-    last_seen_at: '2026-07-30T08:00:00.000Z',
-  },
-  properties: {},
-});
-```
-
-Use `safeParse` when callers need a non-throwing validation path.
