@@ -242,6 +242,7 @@ export const renderWebsiteList = ({
                 <option value="pilot">Pilot</option>
                 <option value="production" disabled>Production</option>
               </select>
+              <span class="muted">Production not yet enabled.</span>
             </label>
             <label>GAM Network Code
               <input name="gam_network_code" inputmode="numeric" autocomplete="off" required>
@@ -333,6 +334,7 @@ const renderGeneralSection = (website: WebsiteDetail): string => `
             <option value="pilot"${selected(website.environment === 'pilot')}>Pilot</option>
             <option value="production" disabled>Production</option>
           </select>
+          <span class="muted">Production not yet enabled.</span>
         </label>
         <label>GAM Network Code
           <input name="gam_network_code" inputmode="numeric" value="${escapeHtml(
@@ -466,11 +468,11 @@ const renderConfigurationSection = (
       </section>
       <section aria-labelledby="pricing-heading">
         <h3 id="pricing-heading">Pricing</h3>
-        <div class="placeholder">Coming in a future story.</div>
+        <div class="placeholder">Coming in a later story.</div>
       </section>
       <section aria-labelledby="retry-heading">
         <h3 id="retry-heading">Retry</h3>
-        <div class="placeholder">Coming in a future story.</div>
+        <div class="placeholder">Coming in a later story.</div>
       </section>
       <div class="actions">
         <button type="submit">Save Configuration</button>

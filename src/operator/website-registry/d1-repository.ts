@@ -21,6 +21,7 @@ import {
 import type { WebsiteRegistryRepository } from './repository.js';
 import {
   OperatorConflictError,
+  OperatorDependencyError,
   OperatorNotFoundError,
   type AdUnit,
   type AdUnitInput,
@@ -72,7 +73,45 @@ interface ConfigVersionRow extends Record<string, unknown> {
   created_at: string;
 }
 
+interface ActiveVersionConfirmationRow extends Record<string, unknown> {
+  active_count: number;
+  active_config_version_id: string | null;
+}
+
 const asWebsiteId = (value: string): WebsiteId => value as WebsiteId;
+
+const validateGeneratedConfig = (config: RuntimeConfig): void => {
+  if (
+    !config.site_id ||
+    !config.site_key ||
+    !config.domain ||
+    !config.gam_network_code ||
+    !config.config_version_id ||
+    !Number.isInteger(config.config_version) ||
+    config.config_version < 1 ||
+    !config.generated_at
+  ) {
+    throw new OperatorDependencyError('Generated runtime configuration is incomplete.');
+  }
+
+  for (const placement of config.placements) {
+    if (
+      !placement.placement_id ||
+      !placement.placement_key ||
+      !placement.gam_ad_unit_path ||
+      !placement.format ||
+      !placement.request_mode
+    ) {
+      throw new OperatorDependencyError('Generated placement configuration is incomplete.');
+    }
+
+    if (Object.keys(placement.targeting).length > 0) {
+      throw new OperatorDependencyError(
+        'Generated runtime configuration contains default targeting.',
+      );
+    }
+  }
+};
 
 const publisherFromRow = (row: PublisherRow): PublisherRecord => ({
   site_id: asWebsiteId(row.site_id),
@@ -517,30 +556,53 @@ export class PilotD1WebsiteRegistryRepository implements WebsiteRegistryReposito
         updated_at: serving.updated_at ?? new Date().toISOString(),
       },
     });
+    validateGeneratedConfig(config);
 
-    await this.d1.query(
-      `
-      INSERT INTO publisher_config_versions (
-        config_version_id, site_id, version, manifest_hash, config_json, active, created_at
-      ) VALUES (?, ?, ?, ?, ?, 0, ?)
-      `,
-      [
-        config.config_version_id,
-        publisher.site_id,
-        config.config_version,
-        manifest_hash,
-        JSON.stringify(config),
-        config.generated_at,
-      ],
-    );
-    await this.d1.query(
-      'UPDATE publisher_config_versions SET active = 1 WHERE site_id = ? AND config_version_id = ?',
-      [publisher.site_id, config.config_version_id],
-    );
-    await this.d1.query(
-      'UPDATE publisher_config_versions SET active = 0 WHERE site_id = ? AND config_version_id <> ?',
-      [publisher.site_id, config.config_version_id],
-    );
+    const batchResults = await this.d1.batch([
+      {
+        sql: `
+          INSERT INTO publisher_config_versions (
+            config_version_id, site_id, version, manifest_hash, config_json, active, created_at
+          ) VALUES (?, ?, ?, ?, ?, 0, ?)
+        `,
+        params: [
+          config.config_version_id,
+          publisher.site_id,
+          config.config_version,
+          manifest_hash,
+          JSON.stringify(config),
+          config.generated_at,
+        ],
+      },
+      {
+        sql: `
+          UPDATE publisher_config_versions
+          SET active = CASE WHEN config_version_id = ? THEN 1 ELSE 0 END
+          WHERE site_id = ?
+        `,
+        params: [config.config_version_id, publisher.site_id],
+      },
+      {
+        sql: `
+          SELECT
+            COUNT(*) AS active_count,
+            MAX(CASE WHEN active = 1 THEN config_version_id END) AS active_config_version_id
+          FROM publisher_config_versions
+          WHERE site_id = ? AND active = 1
+        `,
+        params: [publisher.site_id],
+      },
+    ]);
+    const confirmation = batchResults[2]?.results[0] as ActiveVersionConfirmationRow | undefined;
+
+    if (
+      Number(confirmation?.active_count ?? 0) !== 1 ||
+      confirmation?.active_config_version_id !== config.config_version_id
+    ) {
+      throw new OperatorDependencyError(
+        'Configuration activation failed to confirm exactly one active version.',
+      );
+    }
 
     return { config };
   }

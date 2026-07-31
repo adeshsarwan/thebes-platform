@@ -283,7 +283,8 @@ describe('operator website registry routes', () => {
     expect(body).toContain('Website &gt; General');
     expect(body).toContain('Website &gt; Ad Units');
     expect(body).toContain('Website &gt; Configuration');
-    expect(body).toContain('Coming in a future story.');
+    expect(body).toContain('Coming in a later story.');
+    expect(body).toContain('Production not yet enabled.');
     expect(body).toContain('Pricing');
     expect(body).toContain('Retry');
     expect(body).not.toContain('Site Key');
@@ -314,6 +315,34 @@ describe('operator website registry routes', () => {
     expect(body.value.domain).toBe('example-publisher.com');
     expect(body.value.site_key).toBe('example-publisher.com');
     expect(body.value.display_name).toBe('example-publisher.com');
+
+    await app.close();
+  });
+
+  it('renders validation errors on the operator configure page', async () => {
+    const repository = new RouteRepositoryFake();
+    const app = buildOperatorApp(repository);
+    const website = repository.firstWebsite();
+    const response = await app.inject({
+      method: 'POST',
+      url: `/operator/websites/${website.website_id}/ad-units`,
+      headers: {
+        authorization,
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      payload: new URLSearchParams({
+        placement_key: 'review',
+        gam_ad_unit_path: '/999/review',
+        enabled: 'on',
+      }).toString(),
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.headers['content-type']).toContain('text/html');
+    expect(response.body).toContain('GAM ad unit path must begin with /23360556473/.');
+    expect(response.body).toContain('Website &gt; Ad Units');
+    expect(response.body).toContain('/23360556473/jobsthe.world_Native');
+    expect(response.body).not.toContain(operatorSecret);
 
     await app.close();
   });

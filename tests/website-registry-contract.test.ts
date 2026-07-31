@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { WebsiteId } from '../src/contracts/index.js';
 import { generateWebsiteId } from '../src/utilities/index.js';
-import type { D1Client, D1QueryResult } from '../src/operator/d1-client.js';
+import type { D1Client, D1QueryResult, D1Statement } from '../src/operator/d1-client.js';
 import type { OperatorIdentity } from '../src/operator/auth.js';
 import {
   DEFAULT_SERVING_CONFIGURATION,
@@ -19,6 +19,7 @@ import {
 import { WebsiteRegistryService } from '../src/operator/website-registry/service.js';
 import {
   OperatorConflictError,
+  OperatorDependencyError,
   OperatorSafetyError,
 } from '../src/operator/website-registry/types.js';
 
@@ -63,6 +64,9 @@ interface ConfigVersionRow extends Record<string, unknown> {
 }
 
 class ST004PilotD1Fake implements D1Client {
+  failDuringActivation = false;
+  forceBadConfirmation = false;
+  readonly batchSqlOrder: string[] = [];
   readonly siteId = generateWebsiteId();
   readonly publishers: PublisherRow[] = [
     {
@@ -209,6 +213,79 @@ class ST004PilotD1Fake implements D1Client {
     throw new Error(`Unexpected D1 query: ${normalized}`);
   }
 
+  async batch(statements: D1Statement[]): Promise<Array<D1QueryResult<Record<string, unknown>>>> {
+    const versionSnapshot = this.versions.map((version) => ({ ...version }));
+    const results: Array<D1QueryResult<Record<string, unknown>>> = [];
+
+    try {
+      for (const statement of statements) {
+        const normalized = statement.sql.replace(/\s+/gu, ' ').trim();
+        this.batchSqlOrder.push(normalized);
+
+        if (
+          this.failDuringActivation &&
+          normalized.startsWith('UPDATE publisher_config_versions SET active = CASE')
+        ) {
+          throw new Error('Simulated activation failure');
+        }
+
+        results.push(this.executeBatchStatement(normalized, statement.params ?? []));
+      }
+    } catch (error) {
+      this.versions.splice(0, this.versions.length, ...versionSnapshot);
+      throw error;
+    }
+
+    return results;
+  }
+
+  private executeBatchStatement(
+    normalized: string,
+    params: unknown[],
+  ): D1QueryResult<Record<string, unknown>> {
+    if (normalized.startsWith('INSERT INTO publisher_config_versions')) {
+      const [configVersionId, siteId, version, manifestHash, configJson, createdAt] = params;
+      this.versions.push({
+        config_version_id: String(configVersionId),
+        site_id: String(siteId),
+        version: Number(version),
+        manifest_hash: String(manifestHash),
+        config_json: String(configJson),
+        active: 0,
+        created_at: String(createdAt),
+      });
+
+      return this.result([]);
+    }
+
+    if (normalized.startsWith('UPDATE publisher_config_versions SET active = CASE')) {
+      const [configVersionId, siteId] = params;
+      for (const version of this.versions) {
+        if (version.site_id === siteId) {
+          version.active = version.config_version_id === configVersionId ? 1 : 0;
+        }
+      }
+
+      return this.result([]);
+    }
+
+    if (normalized.startsWith('SELECT COUNT(*) AS active_count')) {
+      const activeVersions = this.versions.filter(
+        (version) => version.site_id === params[0] && version.active === 1,
+      );
+      const activeConfigVersionId = activeVersions[0]?.config_version_id ?? null;
+
+      return this.result([
+        {
+          active_count: this.forceBadConfirmation ? 2 : activeVersions.length,
+          active_config_version_id: activeConfigVersionId,
+        },
+      ]);
+    }
+
+    throw new Error(`Unexpected D1 batch statement: ${normalized}`);
+  }
+
   private result<TRecord extends Record<string, unknown>>(
     results: Record<string, unknown>[],
   ): D1QueryResult<TRecord> {
@@ -344,6 +421,7 @@ describe('pilot D1 integration semantics', () => {
     const after = await service.getWebsiteByDomain('https://www.jobsthe.world/path');
     const activeVersions = d1.versions.filter((version) => version.active === 1);
     const activeConfig = JSON.parse(activeVersions[0]?.config_json ?? '{}') as {
+      config_version_id?: string;
       serving?: unknown;
       placements?: Array<{ targeting?: Record<string, string> }>;
     };
@@ -354,12 +432,58 @@ describe('pilot D1 integration semantics', () => {
     expect(after?.ad_units[0]?.gam_ad_unit_path).toBe('/23360556473/jobsthe.world_Native');
     expect(d1.versions).toHaveLength(2);
     expect(activeVersions).toHaveLength(1);
+    expect(activeConfig.config_version_id).toBe(activeVersions[0]?.config_version_id);
+    expect(d1.batchSqlOrder[0]).toMatch(/^INSERT INTO publisher_config_versions/u);
+    expect(d1.batchSqlOrder[1]).toMatch(/^UPDATE publisher_config_versions SET active = CASE/u);
+    expect(d1.batchSqlOrder[2]).toMatch(/^SELECT COUNT\(\*\) AS active_count/u);
     expect(activeConfig.serving).toMatchObject({
       mode: 'experiment',
       traffic_split: { control_percentage: 90, experiment_percentage: 10 },
       updated_by: 'st019-test',
     });
     expect(activeConfig.placements?.[0]?.targeting).toEqual({});
+  });
+
+  it('rolls back the new version when activation fails in the D1 batch', async () => {
+    const d1 = new ST004PilotD1Fake();
+    d1.failDuringActivation = true;
+    const service = new WebsiteRegistryService(new PilotD1WebsiteRegistryRepository(d1));
+    const beforeVersions = d1.versions.map((version) => ({ ...version }));
+
+    await expect(
+      service.updateServingConfiguration(
+        d1.siteId,
+        {
+          environment: 'pilot',
+          mode: 'experiment',
+          control_percentage: 80,
+          experiment_percentage: 20,
+        },
+        operator,
+      ),
+    ).rejects.toThrow('Simulated activation failure');
+
+    expect(d1.versions).toEqual(beforeVersions);
+    expect(d1.versions.filter((version) => version.active === 1)).toHaveLength(1);
+  });
+
+  it('returns an error when active-version confirmation is not exactly one', async () => {
+    const d1 = new ST004PilotD1Fake();
+    d1.forceBadConfirmation = true;
+    const service = new WebsiteRegistryService(new PilotD1WebsiteRegistryRepository(d1));
+
+    await expect(
+      service.updateServingConfiguration(
+        d1.siteId,
+        {
+          environment: 'pilot',
+          mode: 'experiment',
+          control_percentage: 70,
+          experiment_percentage: 30,
+        },
+        operator,
+      ),
+    ).rejects.toThrow(OperatorDependencyError);
   });
 
   it('rejects duplicate domains and duplicate placement keys', async () => {

@@ -107,6 +107,39 @@ const getErrorStatusCode = (error: unknown): number => {
   return candidate >= 400 && candidate <= 599 ? candidate : 500;
 };
 
+const sendWebsiteFailure = async (
+  reply: FastifyReply,
+  service: WebsiteRegistryService,
+  websiteId: string,
+  error: unknown,
+): Promise<void> => {
+  const statusCode = getErrorStatusCode(error);
+  const website = await service.getWebsite(websiteId).catch(() => null);
+
+  if (website) {
+    reply
+      .status(statusCode)
+      .type('text/html')
+      .send(
+        renderWebsiteDetail({
+          website,
+          flash: { kind: 'error', message: getErrorMessage(error) },
+        }),
+      );
+    return;
+  }
+
+  reply
+    .status(statusCode)
+    .type('text/html')
+    .send(
+      renderWebsiteList({
+        websites: await service.listWebsites().catch(() => []),
+        flash: { kind: 'error', message: getErrorMessage(error) },
+      }),
+    );
+};
+
 export const registerOperatorRoutes = (
   app: FastifyInstance,
   config: AppConfig,
@@ -214,16 +247,20 @@ export const registerOperatorRoutes = (
     if (!operator) return;
 
     const { websiteId } = getParams(request);
-    const result = await service.updateWebsite(
-      websiteId,
-      websiteInputFromBody(formBody(request)),
-      operator,
-    );
-    redirectToWebsite(
-      reply,
-      result.value.website_id,
-      'General settings saved and configuration version activated.',
-    );
+    try {
+      const result = await service.updateWebsite(
+        websiteId,
+        websiteInputFromBody(formBody(request)),
+        operator,
+      );
+      redirectToWebsite(
+        reply,
+        result.value.website_id,
+        'General settings saved and configuration version activated.',
+      );
+    } catch (error) {
+      await sendWebsiteFailure(reply, service, websiteId, error);
+    }
   });
 
   app.post('/operator/websites/:websiteId/ad-units', async (request, reply) => {
@@ -231,16 +268,20 @@ export const registerOperatorRoutes = (
     if (!operator) return;
 
     const { websiteId } = getParams(request);
-    const result = await service.createAdUnit(
-      websiteId,
-      adUnitInputFromBody(formBody(request)),
-      operator,
-    );
-    redirectToWebsite(
-      reply,
-      result.value.website_id,
-      'Ad unit saved and configuration version activated.',
-    );
+    try {
+      const result = await service.createAdUnit(
+        websiteId,
+        adUnitInputFromBody(formBody(request)),
+        operator,
+      );
+      redirectToWebsite(
+        reply,
+        result.value.website_id,
+        'Ad unit saved and configuration version activated.',
+      );
+    } catch (error) {
+      await sendWebsiteFailure(reply, service, websiteId, error);
+    }
   });
 
   app.post('/operator/websites/:websiteId/ad-units/:placementId', async (request, reply) => {
@@ -248,17 +289,21 @@ export const registerOperatorRoutes = (
     if (!operator) return;
 
     const { websiteId, placementId } = getParams(request);
-    const result = await service.updateAdUnit(
-      websiteId,
-      placementId ?? '',
-      adUnitInputFromBody(formBody(request)),
-      operator,
-    );
-    redirectToWebsite(
-      reply,
-      result.value.website_id,
-      'Ad unit saved and configuration version activated.',
-    );
+    try {
+      const result = await service.updateAdUnit(
+        websiteId,
+        placementId ?? '',
+        adUnitInputFromBody(formBody(request)),
+        operator,
+      );
+      redirectToWebsite(
+        reply,
+        result.value.website_id,
+        'Ad unit saved and configuration version activated.',
+      );
+    } catch (error) {
+      await sendWebsiteFailure(reply, service, websiteId, error);
+    }
   });
 
   app.post('/operator/websites/:websiteId/ad-units/:placementId/delete', async (request, reply) => {
@@ -266,12 +311,16 @@ export const registerOperatorRoutes = (
     if (!operator) return;
 
     const { websiteId, placementId } = getParams(request);
-    const result = await service.deleteAdUnit(websiteId, placementId ?? '', operator);
-    redirectToWebsite(
-      reply,
-      result.value.website_id,
-      'Ad unit deleted and configuration version activated.',
-    );
+    try {
+      const result = await service.deleteAdUnit(websiteId, placementId ?? '', operator);
+      redirectToWebsite(
+        reply,
+        result.value.website_id,
+        'Ad unit deleted and configuration version activated.',
+      );
+    } catch (error) {
+      await sendWebsiteFailure(reply, service, websiteId, error);
+    }
   });
 
   app.post('/operator/websites/:websiteId/configuration', async (request, reply) => {
@@ -279,12 +328,20 @@ export const registerOperatorRoutes = (
     if (!operator) return;
 
     const { websiteId } = getParams(request);
-    const result = await service.updateServingConfiguration(
-      websiteId,
-      servingInputFromBody(formBody(request)),
-      operator,
-    );
-    redirectToWebsite(reply, result.value.website_id, 'Configuration saved and version activated.');
+    try {
+      const result = await service.updateServingConfiguration(
+        websiteId,
+        servingInputFromBody(formBody(request)),
+        operator,
+      );
+      redirectToWebsite(
+        reply,
+        result.value.website_id,
+        'Configuration saved and version activated.',
+      );
+    } catch (error) {
+      await sendWebsiteFailure(reply, service, websiteId, error);
+    }
   });
 
   app.get('/api/operator/websites', async (request, reply) => {
