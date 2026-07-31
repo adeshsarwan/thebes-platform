@@ -6,6 +6,11 @@ import { z } from 'zod';
 const LOG_LEVELS = ['trace', 'debug', 'info', 'warn', 'error', 'fatal', 'silent'] as const;
 const NODE_ENV_VALUES = ['development', 'test', 'production'] as const;
 
+const emptyStringToUndefined = (value: unknown): unknown =>
+  typeof value === 'string' && value.trim() === '' ? undefined : value;
+
+const optionalSecret = z.preprocess(emptyStringToUndefined, z.string().trim().min(1).optional());
+
 const readPackageVersion = (): string => {
   try {
     const currentDirectory = dirname(fileURLToPath(import.meta.url));
@@ -41,6 +46,14 @@ const envSchema = z.object({
   LOG_LEVEL: z.enum(LOG_LEVELS).default('info'),
   SERVICE_NAME: z.string().trim().min(1).default('thebes-platform'),
   SERVICE_VERSION: z.string().trim().min(1).default(readPackageVersion()),
+  OPERATOR_SECRET: optionalSecret,
+  CLOUDFLARE_ACCOUNT_ID: optionalSecret,
+  CLOUDFLARE_API_TOKEN: optionalSecret,
+  CLOUDFLARE_API_BASE: z.preprocess(
+    emptyStringToUndefined,
+    z.string().trim().url().default('https://api.cloudflare.com/client/v4'),
+  ),
+  THEBES_PILOT_D1_DATABASE_ID: optionalSecret,
 });
 
 export type AppConfig = z.output<typeof envSchema>;
