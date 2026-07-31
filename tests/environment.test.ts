@@ -19,6 +19,7 @@ describe('environment configuration', () => {
       LOG_LEVEL: 'warn',
       SERVICE_NAME: 'thebes-platform',
       SERVICE_VERSION: '1.2.3',
+      CLOUDFLARE_API_BASE: 'https://api.cloudflare.com/client/v4',
     });
   });
 

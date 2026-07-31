@@ -2,6 +2,14 @@ import fastify, { LogController } from 'fastify';
 import type { FastifyInstance, FastifyServerOptions } from 'fastify';
 import type { AppConfig } from '../config/env.js';
 import { loadConfig } from '../config/env.js';
+import { createConfiguredD1Client } from '../operator/d1-client.js';
+import { registerOperatorRoutes } from '../operator/routes.js';
+import { PilotD1WebsiteRegistryRepository } from '../operator/website-registry/d1-repository.js';
+import {
+  UnconfiguredWebsiteRegistryRepository,
+  type WebsiteRegistryRepository,
+} from '../operator/website-registry/repository.js';
+import { WebsiteRegistryService } from '../operator/website-registry/service.js';
 import {
   REQUEST_ID_HEADER,
   getRequestId,
@@ -23,6 +31,7 @@ export interface ErrorResponse {
 export interface BuildAppOptions {
   config?: AppConfig;
   logger?: FastifyServerOptions['logger'];
+  websiteRegistryRepository?: WebsiteRegistryRepository;
 }
 
 const hasStatusCode = (error: unknown): error is { statusCode: number } =>
@@ -37,13 +46,20 @@ const hasMessage = (error: unknown): error is { message: string } =>
   'message' in error &&
   typeof error.message === 'string';
 
+const hasErrorCode = (error: unknown): error is { code: string } =>
+  typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string';
+
 const getStatusCode = (error: unknown): number => {
   const statusCode = hasStatusCode(error) ? error.statusCode : 500;
 
   return statusCode >= 400 && statusCode <= 599 ? statusCode : 500;
 };
 
-const getErrorCode = (statusCode: number): string => {
+const getErrorCode = (error: unknown, statusCode: number): string => {
+  if (hasErrorCode(error)) {
+    return error.code;
+  }
+
   if (statusCode === 404) {
     return 'NOT_FOUND';
   }
@@ -63,8 +79,18 @@ const getSafeErrorMessage = (error: unknown, statusCode: number, config: AppConf
   return hasMessage(error) && error.message.length > 0 ? error.message : 'Request failed';
 };
 
+const createWebsiteRegistryRepository = (config: AppConfig): WebsiteRegistryRepository => {
+  const d1Client = createConfiguredD1Client(config);
+
+  return d1Client
+    ? new PilotD1WebsiteRegistryRepository(d1Client)
+    : new UnconfiguredWebsiteRegistryRepository();
+};
+
 export const buildApp = (options: BuildAppOptions = {}): FastifyInstance => {
   const config = options.config ?? loadConfig();
+  const websiteRegistryRepository =
+    options.websiteRegistryRepository ?? createWebsiteRegistryRepository(config);
   const app = fastify({
     logger: options.logger ?? { level: config.LOG_LEVEL },
     genReqId: (request) => resolveRequestId(request.headers),
@@ -75,6 +101,7 @@ export const buildApp = (options: BuildAppOptions = {}): FastifyInstance => {
   registerRequestContext(app);
   registerHealthRoute(app, config);
   registerReadinessRoute(app);
+  registerOperatorRoutes(app, config, new WebsiteRegistryService(websiteRegistryRepository));
 
   app.setNotFoundHandler((request, reply) => {
     const response: ErrorResponse = {
@@ -95,7 +122,7 @@ export const buildApp = (options: BuildAppOptions = {}): FastifyInstance => {
     const requestId = getRequestId(request);
     const response: ErrorResponse = {
       error: {
-        code: getErrorCode(statusCode),
+        code: getErrorCode(error, statusCode),
         message: getSafeErrorMessage(error, statusCode, config),
       },
       request_id: requestId,
