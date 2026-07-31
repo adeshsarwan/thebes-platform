@@ -267,6 +267,63 @@ describe('operator website registry routes', () => {
     await app.close();
   });
 
+  it('rejects cross-site operator mutations', async () => {
+    const repository = new RouteRepositoryFake();
+    const app = buildOperatorApp(repository);
+    const beforeVersion = repository.firstWebsite().active_config_version;
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/operator/websites',
+      headers: {
+        authorization,
+        host: 'adcentral.thebesads.com',
+        origin: 'https://evil.example',
+        'sec-fetch-site': 'cross-site',
+      },
+      payload: {
+        domain: 'blocked-origin.example',
+        environment: 'pilot',
+        gam_network_code: '123456',
+        enabled: true,
+      },
+    });
+    const body = response.json();
+
+    expect(response.statusCode).toBe(403);
+    expect(body.error.code).toBe('OPERATOR_ORIGIN_FORBIDDEN');
+    expect(JSON.stringify(body)).not.toContain(operatorSecret);
+    expect(repository.firstWebsite().active_config_version).toBe(beforeVersion);
+
+    await app.close();
+  });
+
+  it('allows same-origin operator mutations', async () => {
+    const repository = new RouteRepositoryFake();
+    const app = buildOperatorApp(repository);
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/operator/websites',
+      headers: {
+        authorization,
+        host: 'adcentral.thebesads.com',
+        origin: 'https://adcentral.thebesads.com',
+      },
+      payload: {
+        domain: 'same-origin.example',
+        environment: 'pilot',
+        gam_network_code: '123456',
+        enabled: true,
+      },
+    });
+    const body = response.json() as OperatorMutationResult<WebsiteDetail>;
+
+    expect(response.statusCode).toBe(201);
+    expect(body.value.domain).toBe('same-origin.example');
+    expect(JSON.stringify(body)).not.toContain(operatorSecret);
+
+    await app.close();
+  });
+
   it('renders the approved Website > General, Ad Units, Configuration hierarchy', async () => {
     const repository = new RouteRepositoryFake();
     const app = buildOperatorApp(repository);

@@ -107,6 +107,52 @@ const getErrorStatusCode = (error: unknown): number => {
   return candidate >= 400 && candidate <= 599 ? candidate : 500;
 };
 
+const unsafeMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+const readHost = (request: FastifyRequest): string => {
+  const forwardedHost = request.headers['x-forwarded-host'];
+  const host = Array.isArray(forwardedHost)
+    ? (forwardedHost[0] ?? '')
+    : (forwardedHost ?? request.headers.host ?? '');
+
+  return host.split(',')[0]?.trim().toLowerCase() ?? '';
+};
+
+const originMatchesHost = (origin: string, host: string): boolean => {
+  try {
+    return new URL(origin).host.toLowerCase() === host;
+  } catch {
+    return false;
+  }
+};
+
+const isTrustedOperatorOrigin = (request: FastifyRequest): boolean => {
+  if (!unsafeMethods.has(request.method)) return true;
+  if (!request.url.startsWith('/operator') && !request.url.startsWith('/api/operator')) {
+    return true;
+  }
+
+  const secFetchSite = request.headers['sec-fetch-site'];
+  if (typeof secFetchSite === 'string' && secFetchSite.toLowerCase() === 'cross-site') {
+    return false;
+  }
+
+  const origin = request.headers.origin;
+  if (origin === undefined) return true;
+  if (Array.isArray(origin) || origin.trim() === '') return false;
+
+  return originMatchesHost(origin, readHost(request));
+};
+
+const sendOriginFailure = (reply: FastifyReply): void => {
+  reply.status(403).send({
+    error: {
+      code: 'OPERATOR_ORIGIN_FORBIDDEN',
+      message: 'Operator request origin is not allowed',
+    },
+  });
+};
+
 const sendWebsiteFailure = async (
   reply: FastifyReply,
   service: WebsiteRegistryService,
@@ -161,6 +207,15 @@ export const registerOperatorRoutes = (
       reply.header(REQUEST_ID_HEADER, getRequestId(request));
     }
     done(null, payload);
+  });
+
+  app.addHook('preHandler', (request, reply, done) => {
+    if (!isTrustedOperatorOrigin(request)) {
+      sendOriginFailure(reply);
+      return;
+    }
+
+    done();
   });
 
   app.get('/operator', (_request, reply) => {
